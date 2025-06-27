@@ -1,9 +1,10 @@
 using UnityEngine;
 
+[RequireComponent(typeof(PlayerInputWrapper))]
 public class PlayerController : MonoBehaviour
 {
     [Header("Grid Settings")]
-    [SerializeField] private Vector2Int startingGridPosition = new Vector2Int(0, 1);
+    [SerializeField] private Vector2Int startingGridPosition = new(0, 1);
     [SerializeField] private GridManager gridManager;
 
     [Header("Attack Settings")]
@@ -11,79 +12,72 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private Vector2 shootDirection = Vector2.right;
     [SerializeField] private string targetTag = "Enemy";
 
-    private Vector2Int gridPosition;
-    private PlayerInputWrapper inputWrapper;
+    /* ------------------------------------------------------------ */
+    private Vector2Int gridPos;
+    private PlayerInputWrapper input;
+    private float  moveCooldown = 0.20f;
+    private float  lastMoveTime;
 
-    private float moveCooldown = 0.2f;  // Time in seconds between movements
-    private float lastMoveTime = 0f;
+    /* =============================  Mono ============================= */
 
     void Start()
     {
-        gridPosition = startingGridPosition;
-        transform.position = gridManager.GetWorldPosition(gridPosition);
+        input   = GetComponent<PlayerInputWrapper>();
+        gridPos = startingGridPosition;
 
-        inputWrapper = GetComponent<PlayerInputWrapper>();
+        transform.position = gridManager.GetWorldPosition(gridPos);
+        gridManager.Register(gameObject, gridPos);          // ← NEW
     }
 
-
-    
-void Update()
-{
-    HandleMovement();
-
-    if (inputWrapper.ShootPressed)
+    void Update()
     {
-        Shoot();
+        HandleMovement();
+
+        if (input.ShootPressed)
+            Shoot();
     }
-}
 
-
-
-
-void HandleMovement()
-{
-    Vector2 input = inputWrapper.MovementInput;
-
-    // Create movement direction vector
-    Vector2Int moveDelta = Vector2Int.zero;
-    const float moveThreshold = 0.5f;
-
-    // Only process movement if enough time has passed since the last movement
-    if (Time.time - lastMoveTime >= moveCooldown)
+    void OnDestroy()
     {
-        // Check vertical movement
-        if (input.y > moveThreshold)
-            moveDelta.y = 1; // Move up by 1 tile
-        else if (input.y < -moveThreshold)
-            moveDelta.y = -1; // Move down by 1 tile
+        // make sure we disappear from the grid even if destroyed by scene reload etc.
+        gridManager.Unregister(gameObject, gridPos);        // ← NEW
+    }
 
-        // Check horizontal movement
-        if (input.x < -moveThreshold)
-            moveDelta.x = -1; // Move left by 1 tile
-        else if (input.x > moveThreshold)
-            moveDelta.x = 1; // Move right by 1 tile
+    /* ==========================  Movement  ========================== */
 
-        // If there is valid movement, update the position
-        if (moveDelta != Vector2Int.zero)
+    void HandleMovement()
+    {
+        if (Time.time - lastMoveTime < moveCooldown) return;
+
+        Vector2  raw = input.MovementInput;
+        Vector2Int delta = Vector2Int.zero;
+
+        const float thresh = 0.5f;
+        if (raw.y  >  thresh) delta.y =  1;
+        if (raw.y  < -thresh) delta.y = -1;
+        if (raw.x  >  thresh) delta.x =  1;
+        if (raw.x  < -thresh) delta.x = -1;
+
+        if (delta == Vector2Int.zero) return;
+
+        Vector2Int next = gridPos + delta;
+
+        bool onPlayerSide = next.x < gridManager.columns / 2;
+        if (gridManager.IsInsideGrid(next) && onPlayerSide)
         {
-            Vector2Int newPosition = gridPosition + moveDelta;
-
-            if (gridManager.IsInsideGrid(newPosition) && newPosition.x < gridManager.columns / 2)
-            {
-                gridPosition = newPosition;
-                transform.position = gridManager.GetWorldPosition(gridPosition);
-            }
-
-            lastMoveTime = Time.time; // Update the time of the last movement
+            gridManager.Unregister(gameObject, gridPos);    // ← NEW
+            gridPos = next;
+            transform.position = gridManager.GetWorldPosition(gridPos);
+            gridManager.Register(gameObject, gridPos);      // ← NEW 
+            lastMoveTime = Time.time;
         }
     }
-}
 
+    /* ============================  Attack  ============================ */
 
     void Shoot()
     {
-        Vector3 spawnPos = transform.position;
-        GameObject proj = Instantiate(projectilePrefab, spawnPos, Quaternion.identity);
-        proj.GetComponent<Projectile>().Initialize(shootDirection, targetTag, true);
+        GameObject proj = Instantiate(projectilePrefab, transform.position, Quaternion.identity);
+        proj.GetComponent<Projectile>().Initialize(shootDirection, targetTag);
     }
 }

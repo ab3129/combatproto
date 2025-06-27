@@ -3,7 +3,7 @@ using UnityEngine;
 public class EnemyController : MonoBehaviour
 {
     [Header("Grid Settings")]
-    [SerializeField] private Vector2Int startingGridPosition = new Vector2Int(5, 1);
+    [SerializeField] private Vector2Int startingGridPosition = new(5, 1);
     [SerializeField] private GridManager gridManager;
 
     [Header("Attack Settings")]
@@ -12,21 +12,25 @@ public class EnemyController : MonoBehaviour
     [SerializeField] private string targetTag = "Player";
     [SerializeField] private float attackCooldown = 2f;
 
-    private Vector2Int gridPosition;
-    private float attackTimer = 0f;
-    private float moveTimer = 0f;
-    private float moveInterval = 2f;
+    /* ------------------------------------------------------------ */
+    private Vector2Int gridPos;
+    private float attackTimer;
+    private float moveTimer;
+    private const float moveInterval = 2f;
 
-    private void Start()
+    /* =============================  Mono ============================= */
+
+    void Start()
     {
-        gridPosition = startingGridPosition;
-        transform.position = gridManager.GetWorldPosition(gridPosition);
+        gridPos = startingGridPosition;
+        transform.position = gridManager.GetWorldPosition(gridPos);
+        gridManager.Register(gameObject, gridPos);          // ← NEW
     }
 
-    private void Update()
+    void Update()
     {
         attackTimer -= Time.deltaTime;
-        moveTimer -= Time.deltaTime;
+        moveTimer   -= Time.deltaTime;
 
         if (attackTimer <= 0f)
         {
@@ -41,42 +45,39 @@ public class EnemyController : MonoBehaviour
         }
     }
 
-    private void Attack()
+    void OnDestroy()
     {
-        Vector3 spawnPos = transform.position;
-        GameObject proj = Instantiate(projectilePrefab, spawnPos, Quaternion.identity);
-        proj.GetComponent<Projectile>().Initialize(shootDirection, targetTag, false);
+        gridManager.Unregister(gameObject, gridPos);        // ← NEW
     }
 
-    private void RandomMove()
+    /* ============================  Attack  ============================ */
+
+    void Attack()
     {
-        Vector2Int[] directions = new Vector2Int[]
+        GameObject proj = Instantiate(projectilePrefab, transform.position, Quaternion.identity);
+        proj.GetComponent<Projectile>().Initialize(shootDirection, targetTag);
+    }
+
+    /* ============================  Movement  =========================== */
+
+    void RandomMove()
+    {
+        Vector2Int[] dirs = { Vector2Int.up, Vector2Int.down, Vector2Int.left, Vector2Int.right };
+
+        // try up to 4 random directions before giving up
+        for (int tries = 0; tries < dirs.Length; ++tries)
         {
-            Vector2Int.up,
-            Vector2Int.down,
-            Vector2Int.left,
-            Vector2Int.right
-        };
+            Vector2Int candidate = gridPos + dirs[Random.Range(0, dirs.Length)];
+            bool onEnemySide = candidate.x >= gridManager.columns / 2;
 
-        Vector2Int newPos = gridPosition;
-        int attempts = 0;
-
-        while (attempts < directions.Length)
-        {
-            Vector2Int tryMove = directions[Random.Range(0, directions.Length)];
-            newPos = gridPosition + tryMove;
-
-            // Prevent enemy from moving onto player-side tiles
-            bool isOnEnemySide = newPos.x >= gridManager.columns / 2;
-
-            if (gridManager.IsInsideGrid(newPos) && isOnEnemySide)
+            if (onEnemySide && gridManager.IsInsideGrid(candidate))
             {
-                gridPosition = newPos;
-                transform.position = gridManager.GetWorldPosition(gridPosition);
-                break;
+                gridManager.Unregister(gameObject, gridPos);    // ← NEW
+                gridPos = candidate;
+                transform.position = gridManager.GetWorldPosition(gridPos);
+                gridManager.Register(gameObject, gridPos);      // ← NEW
+                return;
             }
-
-            attempts++;
         }
     }
 }
