@@ -1,59 +1,50 @@
+// HealthDisplay.cs
 using UnityEngine;
 using TMPro;
 
+[RequireComponent(typeof(HealthSystem))]
 public class HealthDisplay : MonoBehaviour
 {
-    [SerializeField] private Vector3 textOffset = new Vector3(0, .5f, 0); // Lowered Y offset
-    [SerializeField] private GameObject textPrefab;
+    [SerializeField] private Vector3   textOffset = new(0, 0.5f, 0);
+    [SerializeField] private GameObject textPrefab;      // world-space TextMeshPro prefab
 
-    private HealthSystem healthSystem;
-    private TextMeshPro textObj;
+    private HealthSystem health;
+    private TextMeshPro  textMesh;
 
     void Start()
     {
-        // Get reference to the health system on this object
-        healthSystem = GetComponent<HealthSystem>();
+        health = GetComponent<HealthSystem>();
 
-        if (healthSystem == null)
+        if (textPrefab == null)
         {
-            Debug.LogError("Missing HealthSystem component!");
+            Debug.LogError($"{name} → HealthDisplay missing textPrefab reference");
+            enabled = false;
             return;
         }
 
-        if (textPrefab != null)
-        {
-            // Instantiate text object above the sprite
-            GameObject textGO = Instantiate(textPrefab, transform.position + textOffset, Quaternion.identity, transform);
-            textObj = textGO.GetComponent<TextMeshPro>();
+        // Spawn the text object as a child so it follows this transform
+        var go = Instantiate(textPrefab, transform.position + textOffset, Quaternion.identity, transform);
+        textMesh = go.GetComponent<TextMeshPro>();
 
-            // Ensure the text is centered for visibility
-            textObj.alignment = TextAlignmentOptions.Center;
-            
-            // Render above other sprites
-            Renderer rend = textObj.GetComponent<Renderer>();
-            if (rend != null)
-            {
-                rend.sortingOrder = 10;
-            }
+        textMesh.alignment = TextAlignmentOptions.Center;
+        textMesh.GetComponent<Renderer>().sortingOrder = 10;   // render on top
 
-            UpdateHealthText();
-        }
-        else
-        {
-            Debug.LogError("HealthDisplay is missing a TextMeshPro prefab reference!");
-        }
+        UpdateText(health.CurrentHP, health.MaxHP);
+
+        // Subscribe to health changes
+        health.HealthChanged += UpdateText;
     }
 
-    void Update()
+    void OnDisable()
     {
-        UpdateHealthText();
+        if (health != null)
+            health.HealthChanged -= UpdateText;
     }
 
-    private void UpdateHealthText()
+    /* -------------------------------------------------------------- */
+    private void UpdateText(int current, int max)
     {
-        if (textObj != null && healthSystem != null)
-        {
-            textObj.text = healthSystem.currentHealth.ToString();
-        }
+        if (textMesh != null)
+            textMesh.text = current.ToString();   // or $"{current}/{max}" for full bar
     }
 }

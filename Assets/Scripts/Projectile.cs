@@ -1,80 +1,115 @@
+using System.Collections.Generic;
 using UnityEngine;
 
-/// <summary>
-/// Moves in a straight line; the moment it enters a new panel it checks
-/// whether a target with the right tag is standing there.  
-/// No physics engine required.
-/// </summary>
-[RequireComponent(typeof(SpriteRenderer))]   // purely visual – no collider!
-public class Projectile : MonoBehaviour
+[RequireComponent(typeof(SpriteRenderer))]
+public class Projectile : MonoBehaviour, IAttackSource
 {
-    [Header("Flight")]
-    public float speed = 5f;                // world-units per second
-    private Vector2 direction;
+    // ───── Combat data ────────────────────────────────────────────────
+    [SerializeField] AttackDescriptor attack;
+    [SerializeField] Faction          faction;
+    [SerializeField] Vector2Int       direction = Vector2Int.right;
 
-    [Header("Damage")]
-    [SerializeField] private int damage = 1;
-    private string targetTag;
+    // ───── Movement ───────────────────────────────────────────────────
+    [Tooltip("Tiles crossed per second.  Adjust in Inspector or per prefab.")]
+    [Min(0.1f)]
+    [SerializeField] float tilesPerSecond = 10f;
 
-    /* ------------------------------------------------------------ */
-    private GridManager gm;
-    private Vector2Int currentTile;          // last panel we were in
+    Vector2Int tile;          // current grid tile
+    float      accumulator;   // ∑ fixedDeltaTime · tilesPerSecond
+    static readonly List<Vector2Int> single = new(1) { default };
 
-    /// <param name="dir">World-space direction (need not be axis-aligned).</param>
-    /// <param name="target">Tag we’re allowed to damage (e.g. "Enemy").</param>
-    public void Initialize(Vector2 dir, string target)
+    public void Init(AttackDescriptor atk, Faction fac, Vector2Int dir)
     {
-        direction  = dir.normalized;
-        targetTag  = target;
-        gm         = GridManager.I;
+        Debug.Log($"Projectile Init: Received AttackDescriptor: {(atk == null ? "NULL" : atk.name)}, faction: {fac}");
+        
+        attack    = atk;
+        faction   = fac;
+        direction = dir;
 
-        currentTile = WorldToTile(transform.position);
+        // Initialize tile and move one step immediately
+        tile = GridManager.I.WorldToTile(transform.position);
+        Debug.Log($"Projectile Init: Starting at world pos {transform.position}, tile {tile}, faction {faction}");
+        Debug.Log($"Projectile Init: AttackData after assignment: {(attack == null ? "NULL" : attack.name)}");
+        StepOneTile();
     }
 
-    void Update()
+    // ───── Unity life-cycle ───────────────────────────────────────────
+    void Start()
     {
-        // 1 · Move
-        transform.Translate(direction * speed * Time.deltaTime, Space.World);
+        // Removed GridManager.I.AddAttack(this, tile); as it's now handled in Init()
+    }
 
-        // 2 · Figure out which panel we’re in now
-        Vector2Int tile = WorldToTile(transform.position);
+    void FixedUpdate()
+    {
+        accumulator += Time.fixedDeltaTime * tilesPerSecond;
 
-        // 3 · If we stepped into a new panel, run the hit test
-        if (tile != currentTile)
+        while (accumulator >= 1f)
         {
-            currentTile = tile;
-            CheckForHit(tile);
+            accumulator -= 1f;
+            StepOneTile();
         }
-
-        // 4 · Out-of-bounds? destroy self
-        if (!gm.IsInsideGrid(tile))
-            Destroy(gameObject);
     }
 
-    /* =====================  Helpers  ===================== */
-
-    Vector2Int WorldToTile(Vector3 worldPos)
+    void StepOneTile()
     {
-        float step = gm.tileSize + gm.tileSpacing;
-        return new Vector2Int(
-            Mathf.RoundToInt(worldPos.x / step),
-            Mathf.RoundToInt(worldPos.y / step)
-        );
-    }
+        GridManager.I.RemoveAttack(this, tile);
 
-    void CheckForHit(Vector2Int tile)
-    {
-        if (!gm.IsInsideGrid(tile)) return;
-
-        foreach (GameObject obj in gm.GetOccupants(tile))
+        tile += direction;
+        if (!GridManager.I.IsInsideGrid(tile))
         {
-            if (!obj.CompareTag(targetTag)) continue;
-
-            if (obj.TryGetComponent(out HealthSystem hp))
-                hp.TakeDamage(damage);
-
+            Debug.Log($"Projectile destroyed: Outside grid at tile {tile}");
             Destroy(gameObject);
             return;
         }
+
+        transform.position = GridManager.I.GetWorldPos(tile);
+        GridManager.I.AddAttack(this, tile);
+
+        Debug.Log($"Projectile moved to tile {tile}, checking for targets...");
+        
+        // Log what's on this tile before combat resolution
+        var pairs = GridManager.I.GetPairsToResolveForTile(tile);
+        var pairsList = new System.Collections.Generic.List<CombatPair>(pairs);
+        Debug.Log($"Found {pairsList.Count} combat pairs on tile {tile}");
+
+        // Resolve combat immediately upon entering a new tile
+        foreach (var pair in pairsList)
+        {
+            Debug.Log($"Combat: {pair.attack.Faction} attacking {pair.target.Faction} on tile {tile}");
+            
+            // Debug null reference issue
+            if (pair.attack == null)
+            {
+                Debug.LogError("pair.attack is null!");
+                continue;
+            }
+            if (pair.attack.AttackData == null)
+            {
+                Debug.LogError($"pair.attack.AttackData is null for {pair.attack.GetType().Name}!");
+                continue;
+            }
+            
+            Debug.Log($"Damage amount: {pair.attack.AttackData.damage}");
+            pair.target.ApplyDamage(pair.attack.AttackData.BuildDamageEvent());
+            Destroy(gameObject); // Destroy projectile after hit
+            return; // Exit after first hit
+        }
+        
+        if (pairsList.Count == 0)
+        {
+            Debug.Log($"No valid targets found on tile {tile} for {faction} projectile");
+        }
     }
+
+    void OnDestroy()
+    {
+        Debug.Log($"Projectile destroyed at tile {tile}");
+        if (GridManager.I != null && GridManager.I.IsInsideGrid(tile))
+            GridManager.I.RemoveAttack(this, tile);
+    }
+
+    // ───── IAttackSource / IGridObject implementation ────────────────
+    public AttackDescriptor          AttackData => attack;
+    public Faction                   Faction    => faction;
+    public IReadOnlyList<Vector2Int> Tiles      { get { single[0] = tile; return single; } }
 }

@@ -1,102 +1,225 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-/// <summary>
-/// Builds the panel grid and keeps a fast lookup table that says
-/// “which GameObjects are standing on panel (x,y) right now?”.
-/// </summary>
 public class GridManager : MonoBehaviour
 {
-    [Header("Grid layout")]
-    public int columns = 6;
-    public int rows    = 3;
-    public float tileSize    = 1f;
-    public float tileSpacing = 0.1f;       // gap between tiles
-    public GameObject tilePrefab;
+    [Header("Layout")] public int   columns     = 6;
+    [Header("Layout")] public int   rows        = 3;
+    [Header("Layout")] public float tileSize    = 1f;
+    [Header("Layout")] public float tileSpacing = 0.1f;
 
-    [Header("Visuals")]
-    public Color playerSideColor = Color.blue;
-    public Color enemySideColor  = Color.red;
+    [Header("Visuals")] [SerializeField] private GameObject tilePrefab;
+    [Header("Visuals")] [SerializeField] private Color playerSide = new(0.20f, 0.40f, 1f);
+    [Header("Visuals")] [SerializeField] private Color enemySide  = new(1f, 0.30f, 0.30f);
 
-    /* ------------------------------------------------------------ */
+    // Singleton
     public static GridManager I { get; private set; }
 
-    /// <summary>grid[x,y] → Tile component for quick colour changes, etc.</summary>
-    private Tile[,] grid;
+    // Logical grid
+    private PanelState[] panels;
+    private readonly HashSet<IGridObject> tmpSet = new();
 
-    /// <summary>Which things occupy which panel right now.</summary>
-    private readonly Dictionary<Vector2Int, List<GameObject>> occupancy = new();
+    // Visual grid
+    private Tile[,] tiles;
 
-    void Awake() => I = this;
-
-    void Start()
+    void Awake()
     {
-        GenerateGrid();
-        CenterCamera();
+        if (I != null && I != this) { Destroy(this); return; }
+        I = this;
+
+        // 1 ▸ allocate logical panel data
+        panels = new PanelState[columns * rows];
+        for (int i = 0; i < panels.Length; ++i)
+        {
+            panels[i].objects = new HashSet<IGridObject>();
+            panels[i].attacks = new HashSet<IAttackSource>();
+        }
+
+        // 2 ▸ instantiate visible grid
+        BuildVisualGrid();
+        FitCamera();
     }
 
-    /* =====================  Public lookup API  ===================== */
-
-    /// <summary>Add obj to the given panel (call when it spawns or moves).</summary>
-    public void Register(GameObject obj, Vector2Int tile)
+    // -----------------------------------------------------------------
+    // Visual Grid
+    // -----------------------------------------------------------------
+    void BuildVisualGrid()
     {
-        if (!occupancy.TryGetValue(tile, out var list))
-            list = occupancy[tile] = new List<GameObject>();
+        if (tilePrefab == null)
+        {
+            Debug.LogWarning("GridManager → tilePrefab not assigned – grid will be invisible.");
+            return;
+        }
 
-        if (!list.Contains(obj))
-            list.Add(obj);
-    }
-
-    /// <summary>Remove obj from the given panel (call before it moves or dies).</summary>
-    public void Unregister(GameObject obj, Vector2Int tile)
-    {
-        if (occupancy.TryGetValue(tile, out var list))
-            list.Remove(obj);
-    }
-
-    /// <summary>All objects currently standing on this panel.</summary>
-    public IEnumerable<GameObject> GetOccupants(Vector2Int tile) =>
-        occupancy.TryGetValue(tile, out var list) ? list : System.Array.Empty<GameObject>();
-
-    public bool IsInsideGrid(Vector2Int pos) =>
-        pos.x >= 0 && pos.x < columns && pos.y >= 0 && pos.y < rows;
-
-    public Vector3 GetWorldPosition(Vector2Int gridPos)
-    {
-        float x = gridPos.x * (tileSize + tileSpacing);
-        float y = gridPos.y * (tileSize + tileSpacing);
-        return new Vector3(x, y, 0f);
-    }
-
-    /* =====================  Private helpers  ===================== */
-
-    void GenerateGrid()
-    {
-        grid = new Tile[columns, rows];
+        tiles = new Tile[columns, rows];
+        float step = tileSize + tileSpacing;
 
         for (int x = 0; x < columns; ++x)
-        for (int y = 0; y < rows;   ++y)
+        for (int y = 0; y < rows;    ++y)
         {
-            Vector3 pos = GetWorldPosition(new Vector2Int(x, y));
-            GameObject tileObj = Instantiate(tilePrefab, pos, Quaternion.identity, transform);
+            Vector2Int gp = new(x, y);
+            Vector3    wp = new(x * step, y * step, 0f);
 
-            Tile tile = tileObj.GetComponent<Tile>();
-            grid[x, y] = tile;
+            GameObject go = Instantiate(tilePrefab, wp, Quaternion.identity, transform);
+            go.name       = $"Tile_{x}_{y}";
 
-            tile.SetColor(x < columns / 2 ? playerSideColor : enemySideColor);
-            tile.gridPosition = new Vector2Int(x, y);
+            if (!go.TryGetComponent(out Tile t))
+            {
+                Debug.LogError("Tile prefab missing ‘Tile’ script.");
+                Destroy(go);
+                continue;
+            }
+
+            Color baseCol = (x < columns / 2) ? playerSide : enemySide;
+            t.Init(gp, baseCol);
+            tiles[x, y] = t;
+        }
+    }
+    
+    // GridManager.cs (add inside the class)
+    void FitCamera()
+    {
+        var cam = Camera.main;
+        if (cam == null || !cam.orthographic) return;
+
+        float step = tileSize + tileSpacing;
+        Vector2 gridSize = new(columns * step, rows * step);
+
+        // Position the camera so it looks at the middle of the grid
+        Vector3 centre = new Vector3(
+            (gridSize.x - step) * 0.5f,   // centre X
+            (gridSize.y - step) * 0.5f,   // centre Y
+            cam.transform.position.z);    // keep current Z
+        cam.transform.position = centre;
+
+        // Choose an ortho size that fits the larger of width/height
+        float halfGridH = gridSize.y * 0.5f;
+        float halfGridW = gridSize.x * 0.5f / cam.aspect;
+        cam.orthographicSize = Mathf.Max(halfGridH, halfGridW) + 0.5f; // +margin
+    }
+
+
+    public bool IsInsideGrid(Vector2Int t)
+    {
+        bool inside = t.x >= 0 && t.x < columns && t.y >= 0 && t.y < rows;
+        if (!inside)
+        {
+            Debug.LogWarning($"IsInsideGrid: Tile {t} is outside grid (columns: {columns}, rows: {rows})");
+        }
+        return inside;
+    }
+    public Vector3  GetWorldPos(Vector2Int t)
+    {
+        float step = tileSize + tileSpacing;
+        return new Vector3(t.x * step, t.y * step, 0f);
+    }
+    public Vector2Int WorldToTile(Vector3 pos)
+    {
+        float step = tileSize + tileSpacing;
+        return new Vector2Int(Mathf.RoundToInt(pos.x / step), Mathf.RoundToInt(pos.y / step));
+    }
+
+    // -----------------------------------------------------------------
+    // Occupancy helpers
+    // -----------------------------------------------------------------
+    public void UpdateOccupancy(IGridObject obj, IList<Vector2Int> oldTiles, IList<Vector2Int> newTiles)
+    {
+        foreach (var t in oldTiles)
+        {
+            if (IsInsideGrid(t))
+            {
+                panels[Index(t)].objects.Remove(obj);
+                Debug.Log($"GridManager: Removed object {obj.GetType().Name} ({obj.Faction}) from tile {t}. Objects on tile: {panels[Index(t)].objects.Count}");
+            }
+        }
+        foreach (var t in newTiles)
+        {
+            if (IsInsideGrid(t))
+            {
+                panels[Index(t)].objects.Add(obj);
+                Debug.Log($"GridManager: Added object {obj.GetType().Name} ({obj.Faction}) to tile {t}. Objects on tile: {panels[Index(t)].objects.Count}");
+            }
+        }
+    }
+    public void AddAttack(IAttackSource atk, Vector2Int tile)
+    {
+        if (IsInsideGrid(tile))
+        {
+            panels[Index(tile)].attacks.Add(atk);
+            Debug.Log($"GridManager: Added attack {atk.GetType().Name} ({atk.Faction}) to tile {tile}. Attacks on tile: {panels[Index(tile)].attacks.Count}");
+        }
+    }
+    public void RemoveAttack(IAttackSource atk, Vector2Int tile)
+    {
+        if (IsInsideGrid(tile))
+        {
+            panels[Index(tile)].attacks.Remove(atk);
+            Debug.Log($"GridManager: Removed attack {atk.GetType().Name} ({atk.Faction}) from tile {tile}. Attacks on tile: {panels[Index(tile)].attacks.Count}");
         }
     }
 
-    void CenterCamera()
+    // -----------------------------------------------------------------
+    // Combat resolution query
+    // -----------------------------------------------------------------
+    public IEnumerable<CombatPair> GetPairsToResolve()
     {
-        Camera cam = Camera.main;
-        if (cam == null) return;
+        for (int i = 0; i < panels.Length; ++i)
+        {
+            // This method is now deprecated. Use GetPairsToResolveForTile in a loop if needed.
+            // For now, it will still function but the primary combat resolution will be per-tile.
+            var p = panels[i];
+            if (p.attacks.Count == 0 || p.objects.Count == 0) continue;
 
-        float width  = (columns - 1) * (tileSize + tileSpacing);
-        float height = (rows    - 1) * (tileSize + tileSpacing);
+            foreach (var atk in p.attacks)
+            {
+                tmpSet.Clear();
+                foreach (var o in p.objects) tmpSet.Add(o); // snapshot
 
-        cam.transform.position = new Vector3(width / 2f, height / 2f, -10f);
-        cam.orthographicSize   = Mathf.Max(width, height) / 2.5f;   // tune to taste
+                foreach (var obj in tmpSet)
+                    if (obj is IDamageable d && obj.Faction != atk.Faction)
+                        yield return new CombatPair(atk, d);
+            }
+        }
+    }
+
+    public IEnumerable<CombatPair> GetPairsToResolveForTile(Vector2Int tile)
+    {
+        if (!IsInsideGrid(tile)) yield break;
+
+        var p = panels[Index(tile)];
+        if (p.attacks.Count == 0 || p.objects.Count == 0) yield break;
+
+        foreach (var atk in p.attacks)
+        {
+            tmpSet.Clear();
+            foreach (var o in p.objects) tmpSet.Add(o); // snapshot
+
+            foreach (var obj in tmpSet)
+                if (obj is IDamageable d && obj.Faction != atk.Faction)
+                    yield return new CombatPair(atk, d);
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Internals
+    // -----------------------------------------------------------------
+    private int Index(Vector2Int t) => t.x + t.y * columns;
+
+    private struct PanelState
+    {
+        public HashSet<IGridObject>  objects;
+        public HashSet<IAttackSource> attacks;
+    }
+}
+
+public readonly struct CombatPair
+{
+    public readonly IAttackSource attack;
+    public readonly IDamageable   target;
+
+    public CombatPair(IAttackSource atk, IDamageable tgt)
+    {
+        attack = atk;
+        target = tgt;
     }
 }

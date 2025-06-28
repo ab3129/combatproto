@@ -14,7 +14,7 @@ GameObject:
   - component: {fileID: 710504085996337814}
   - component: {fileID: 3286605197325576126}
   - component: {fileID: -2124174058349333591}
-  m_Layer: 2
+  m_Layer: 3
   m_Name: Projectile
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -125,8 +125,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 48a9a43ce8bcf384692bc27e480446ad, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  speed: 5
-  damage: 1
+  attack: {fileID: 0}
+  faction: 0
+  direction: {x: 1, y: 0}
 --- !u!61 &3286605197325576126
 BoxCollider2D:
   m_ObjectHideFlags: 0

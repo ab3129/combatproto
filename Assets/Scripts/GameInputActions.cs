@@ -190,7 +190,6 @@ public partial class @GameInputActions: IInputActionCollection2, IDisposable
 
     ~@GameInputActions()
     {
-        UnityEngine.Debug.Assert(!m_Player.enabled, "This will cause a leak and performance issues, GameInputActions.Player.Disable() has not been called.");
     }
 
     /// <summary>
