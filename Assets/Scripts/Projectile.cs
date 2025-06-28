@@ -16,6 +16,8 @@ public class Projectile : MonoBehaviour, IAttackSource
 
     Vector2Int tile;          // current grid tile
     float      accumulator;   // ∑ fixedDeltaTime · tilesPerSecond
+    Vector3    _startWorldPos; // World position at the start of the current tile movement
+    Vector3    _targetWorldPos; // World position at the end of the current tile movement
     static readonly List<Vector2Int> single = new(1) { default };
 
     public void Init(AttackDescriptor atk, Faction fac, Vector2Int dir)
@@ -28,9 +30,11 @@ public class Projectile : MonoBehaviour, IAttackSource
 
         // Initialize tile and move one step immediately
         tile = GridManager.I.WorldToTile(transform.position);
+        _startWorldPos = GridManager.I.GetWorldPos(tile); // Set initial start position
+        _targetWorldPos = GridManager.I.GetWorldPos(tile + direction); // Set initial target position
         Debug.Log($"Projectile Init: Starting at world pos {transform.position}, tile {tile}, faction {faction}");
         Debug.Log($"Projectile Init: AttackData after assignment: {(attack == null ? "NULL" : attack.name)}");
-        StepOneTile();
+        StepOneTile(); // Perform the first logical step
     }
 
     // ───── Unity life-cycle ───────────────────────────────────────────
@@ -47,7 +51,11 @@ public class Projectile : MonoBehaviour, IAttackSource
         {
             accumulator -= 1f;
             StepOneTile();
+            if (gameObject == null) return; // Projectile might be destroyed after StepOneTile
         }
+
+        // Smoothly interpolate visual position
+        transform.position = Vector3.Lerp(_startWorldPos, _targetWorldPos, accumulator);
     }
 
     void StepOneTile()
@@ -62,7 +70,10 @@ public class Projectile : MonoBehaviour, IAttackSource
             return;
         }
 
-        transform.position = GridManager.I.GetWorldPos(tile);
+        // Update world positions for smooth interpolation
+        _startWorldPos = GridManager.I.GetWorldPos(tile);
+        _targetWorldPos = GridManager.I.GetWorldPos(tile + direction);
+
         GridManager.I.AddAttack(this, tile);
 
         Debug.Log($"Projectile moved to tile {tile}, checking for targets...");
@@ -91,8 +102,35 @@ public class Projectile : MonoBehaviour, IAttackSource
             
             Debug.Log($"Damage amount: {pair.attack.AttackData.damage}");
             pair.target.ApplyDamage(pair.attack.AttackData.BuildDamageEvent());
-            Destroy(gameObject); // Destroy projectile after hit
-            return; // Exit after first hit
+
+            // Handle different attack types
+            switch (pair.attack.AttackData.attackType)
+            {
+                case AttackType.SingleTarget:
+                    // Already handled by the line above
+                    break;
+                case AttackType.VerticalSplash:
+                    Debug.Log($"Applying vertical splash from tile {tile}");
+                    foreach (var areaEffect in pair.attack.AttackData.areaEffects)
+                    {
+                        Vector2Int affectedTile = tile + areaEffect.offset;
+                        Debug.Log($"Checking affected tile: {affectedTile}");
+                        var splashPairs = GridManager.I.GetPairsToResolveForTile(affectedTile);
+                        foreach (var splashPair in splashPairs)
+                        {
+                            if (splashPair.target.Faction != pair.attack.Faction)
+                            {
+                                Debug.Log($"Applying splash damage to {splashPair.target.GetType().Name} on tile {affectedTile}");
+                                splashPair.target.ApplyDamage(areaEffect.BuildDamageEvent());
+                            }
+                        }
+                    }
+                    break;
+                // Add more cases for other attack types as needed
+            }
+            
+            Destroy(gameObject); // Destroy projectile after all damage (primary and area) is applied
+            return; // Exit after first hit and its area effects
         }
         
         if (pairsList.Count == 0)
